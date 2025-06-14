@@ -19,18 +19,6 @@
 - **🎼 Music Generation**: Jukebox, MusicLM - understand basic musical structures
 - **🔊 Audio Classification**: Environmental sounds, music genres - recognize distinct patterns
 
-#### Natural Language Processing
-- **🔤 Tokenizer Training**: BPE, SentencePiece, WordPiece - learn common patterns first
-- **📚 Language Model Pretraining**: BERT, GPT, T5 - build from simple to complex language
-- **🌐 Machine Translation**: Transformer models - start with direct word mappings
-- **📝 Text Classification**: BERT-based models - learn clear category distinctions
-
-#### Specialized Domains
-- **🎮 Reinforcement Learning**: Experience replay prioritization
-- **🕸️ Graph Neural Networks**: Node/edge difficulty assessment  
-- **📈 Time Series**: Sequence complexity modeling
-- **🏥 Medical Imaging**: Pathology detection, medical classification
-
 ---
 
 A ready-to-use curriculum learning library that uses K-means clustering on pretrained model features to generate difficulty-based sample weights for **efficient large-scale training**. 
