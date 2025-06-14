@@ -9,6 +9,7 @@ from tqdm import tqdm
 from typing import Optional, Union, Callable, Tuple, Any
 import warnings
 from abc import ABC, abstractmethod
+import math
 
 
 class FeatureExtractor(ABC):
@@ -111,6 +112,13 @@ class CurriculumLearning:
     4. Samples farther from cluster centers are considered more difficult
     """
     
+    # Theoretical maximum effective ratio from weight sampler (1 - 1/e)
+    THEORETICAL_MAX_EFFECTIVE_RATIO = 1 - 1/math.e  # ≈ 0.632
+    
+    # Temperature bounds from weight sampler
+    MIN_TEMPERATURE = 1e-6  # Very small but non-zero to avoid numerical issues
+    MAX_TEMPERATURE = 10.0  # Theoretical maximum from weight sampler
+    
     def __init__(self, 
                  feature_extractor: FeatureExtractor,
                  n_clusters: Optional[int] = None,
@@ -122,7 +130,8 @@ class CurriculumLearning:
                  use_minibatch_kmeans: bool = True,
                  initial_effective_percentage: float = 0.3,
                  warmup_iterations: int = 1000,
-                 random_state: int = 42):
+                 random_state: int = 42,
+                 max_effective_ratio: Optional[float] = None):
         """
         Args:
             feature_extractor: FeatureExtractor instance for extracting features
@@ -136,6 +145,7 @@ class CurriculumLearning:
             initial_effective_percentage: Initial percentage of dataset to use (0.1 to 1.0)
             warmup_iterations: Number of warmup iterations for curriculum progression
             random_state: Random seed for reproducibility
+            max_effective_ratio: Maximum effective ratio (defaults to theoretical maximum)
         """
         self.feature_extractor = feature_extractor
         self.n_clusters = n_clusters
@@ -149,11 +159,17 @@ class CurriculumLearning:
         self.warmup_iterations = warmup_iterations
         self.random_state = random_state
         
+        # Use theoretical maximum effective ratio if not specified
+        self.max_effective_ratio = (max_effective_ratio if max_effective_ratio is not None 
+                                  else self.THEORETICAL_MAX_EFFECTIVE_RATIO)
+        
         # Validate parameters
         if not 0.1 <= initial_effective_percentage <= 1.0:
             raise ValueError("initial_effective_percentage must be between 0.1 and 1.0")
         if warmup_iterations < 0:
             raise ValueError("warmup_iterations must be non-negative")
+        if not 0.1 <= self.max_effective_ratio <= 1.0:
+            raise ValueError("max_effective_ratio must be between 0.1 and 1.0")
         
         # Internal state
         self.features_ = None
@@ -386,40 +402,44 @@ class CurriculumLearning:
                                        strategy: str = 'difficulty') -> float:
         """
         Compute the effective dataset size given weights and temperature
+        Based on the method from weight_sampler.py
         
         Args:
-            weights: Difficulty weights
+            weights: Difficulty weights (distances)
             temperature: Temperature parameter for softmax
             strategy: 'difficulty' or 'easy'
         
         Returns:
             Effective dataset size as a percentage (0.0 to 1.0)
         """
+        N = len(weights)
+        d = torch.tensor(weights, dtype=torch.float32)
+        
         if strategy == 'difficulty':
-            softmax_weights = torch.softmax(torch.tensor(weights) / temperature, dim=0).numpy()
+            # For difficulty strategy, use distances directly
+            sampling_prob = F.softmax(-d / temperature, dim=0)
         else:  # strategy == 'easy'
-            softmax_weights = torch.softmax(-torch.tensor(weights) / temperature, dim=0).numpy()
+            # For easy strategy, use negative distances
+            sampling_prob = F.softmax(d / temperature, dim=0)
         
-        # Compute effective dataset size using entropy-based measure
-        # Higher entropy = more uniform = larger effective size
-        entropy = -np.sum(softmax_weights * np.log(softmax_weights + 1e-8))
-        max_entropy = np.log(len(weights))  # Maximum possible entropy (uniform distribution)
-        effective_size = entropy / max_entropy
+        # Compute effective dataset size using the formula from weight_sampler.py
+        prob_32 = (1 - sampling_prob)
+        val_32 = prob_32 ** N
+        Neff = torch.sum(1 - val_32)
         
-        return effective_size
+        return (Neff / N).item()
     
     def _find_temperature_for_effective_size(self, target_effective_size: float, 
                                            strategy: str = 'difficulty',
-                                           temp_range: Tuple[float, float] = (0.1, 5.0),
-                                           tolerance: float = 0.01,
-                                           max_iterations: int = 50) -> float:
+                                           tolerance: float = 0.0001,
+                                           max_iterations: int = 200) -> float:
         """
         Use binary search to find temperature that achieves target effective dataset size
+        Based on the effectivate_ratio_to_temperature method from weight_sampler.py
         
         Args:
             target_effective_size: Target effective dataset size (0.0 to 1.0)
             strategy: 'difficulty' or 'easy'
-            temp_range: Range of temperatures to search within
             tolerance: Tolerance for convergence
             max_iterations: Maximum number of binary search iterations
         
@@ -429,47 +449,45 @@ class CurriculumLearning:
         if self.weights_ is None:
             raise ValueError("Model has not been fitted yet. Call fit() first.")
         
-        low_temp, high_temp = temp_range
+        # Use theoretical bounds from weight_sampler.py
+        tau_min = self.MIN_TEMPERATURE
+        tau_max = self.MAX_TEMPERATURE
         
         for _ in range(max_iterations):
-            mid_temp = (low_temp + high_temp) / 2
+            tau = (tau_max + tau_min) / 2
             current_effective_size = self._compute_effective_dataset_size(
-                self.weights_, mid_temp, strategy
+                self.weights_, tau, strategy
             )
             
             if abs(current_effective_size - target_effective_size) < tolerance:
-                return mid_temp
-            
-            if current_effective_size < target_effective_size:
-                # Need higher temperature for larger effective size
-                low_temp = mid_temp
+                break
+            elif current_effective_size > target_effective_size:
+                tau_max = tau
             else:
-                # Need lower temperature for smaller effective size  
-                high_temp = mid_temp
+                tau_min = tau
         
-        # Return the best approximation
-        return (low_temp + high_temp) / 2
+        return tau
     
     def _compute_max_temperature(self, strategy: str = 'difficulty') -> float:
         """
-        Compute the maximum temperature by finding temperature for theoretical max effective dataset size (1.0)
+        Compute the maximum temperature for theoretical maximum effective dataset size
         
         Args:
             strategy: 'difficulty' or 'easy'
             
         Returns:
-            Maximum temperature for theoretical max effective dataset size
+            Maximum temperature for theoretical maximum effective dataset size
         """
         return self._find_temperature_for_effective_size(
-            target_effective_size=1.0,
-            strategy=strategy,
-            temp_range=(0.1, 10.0)  # Extended range for max temperature
+            target_effective_size=self.max_effective_ratio,
+            strategy=strategy
         )
 
     def _compute_temperature(self, effective_percentage: float, 
                            strategy: str = 'difficulty') -> float:
         """
         Automatically compute temperature based on effective dataset percentage using binary search
+        Based on the approach from weight_sampler.py
         
         Args:
             effective_percentage: Current effective dataset percentage (0.0 to 1.0)
@@ -478,8 +496,8 @@ class CurriculumLearning:
         Returns:
             Computed temperature value
         """
-        # Clamp effective_percentage to valid range
-        effective_percentage = max(0.0, min(1.0, effective_percentage))
+        # Clamp effective_percentage to valid range, respecting theoretical maximum
+        effective_percentage = max(0.0, min(self.max_effective_ratio, effective_percentage))
         
         # Use binary search to find temperature for the target effective size
         temperature = self._find_temperature_for_effective_size(
@@ -513,7 +531,7 @@ class CurriculumLearning:
         
         weights = self.weights_.copy()
         
-        # After curriculum learning stage: return uniform distribution (multiply by 0 + 1)
+        # After curriculum learning stage: return uniform distribution
         if current_iteration >= warmup_iterations:
             # Uniform distribution: all samples have equal weight
             n_samples = len(weights)
@@ -523,9 +541,11 @@ class CurriculumLearning:
         # During curriculum learning stage: use temperature-based curriculum
         # Calculate curriculum progression factor and effective percentage
         progress = current_iteration / warmup_iterations if warmup_iterations > 0 else 1.0
+        
+        # Progress from initial_effective_percentage to max_effective_ratio
         current_effective_percentage = (
             self.initial_effective_percentage + 
-            (1.0 - self.initial_effective_percentage) * progress
+            (self.max_effective_ratio - self.initial_effective_percentage) * progress
         )
         
         # Automatically compute temperature based on effective dataset size
@@ -533,35 +553,19 @@ class CurriculumLearning:
             current_effective_percentage, strategy
         )
         
-        # Calculate curriculum weights based on strategy
+        # Calculate curriculum weights based on strategy using the same approach as weight_sampler.py
         if strategy == 'difficulty':
-            # Higher difficulty = higher weight
+            # Higher difficulty = higher weight (use -distances/temperature)
             curriculum_weights = torch.softmax(
-                torch.tensor(weights) / temperature, dim=0
+                -torch.tensor(weights, dtype=torch.float32) / temperature, dim=0
             ).numpy()
         elif strategy == 'easy':
-            # Lower difficulty = higher weight
+            # Lower difficulty = higher weight (use distances/temperature)
             curriculum_weights = torch.softmax(
-                -torch.tensor(weights) / temperature, dim=0
+                torch.tensor(weights, dtype=torch.float32) / temperature, dim=0
             ).numpy()
         else:
             raise ValueError("Strategy must be 'difficulty' or 'easy'")
-        
-        # Scale weights to achieve target effective percentage
-        if current_effective_percentage < 1.0:
-            # Set a fraction of weights to zero to reduce effective dataset size
-            n_samples = len(curriculum_weights)
-            n_active = int(n_samples * current_effective_percentage)
-            
-            # Get indices of samples to keep (highest weights for current strategy)
-            active_indices = np.argpartition(curriculum_weights, -n_active)[-n_active:]
-            
-            # Set inactive samples to very low weight (but not zero to avoid sampling issues)
-            scaled_weights = np.full_like(curriculum_weights, 1e-6)
-            scaled_weights[active_indices] = curriculum_weights[active_indices]
-            
-            # Renormalize
-            curriculum_weights = scaled_weights / scaled_weights.sum()
         
         return curriculum_weights
     
