@@ -79,15 +79,25 @@ pip install -r curriculum_requirements.txt
 
 ## Quick Start
 
-### Basic Usage with DINO (Recommended)
+### Basic Usage with Curriculum Progression
 
 ```python
 import torch
 import torchvision
 from curriculum_learning import create_curriculum_learning_with_dino
 
-# Load your dataset
-dataset = torchvision.datasets.CIFAR10(root='./data', train=True, transform=transforms)
+# Load your dataset (ImageNet example for large-scale training)
+transform = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+dataset = torchvision.datasets.ImageNet(root='./data/imagenet', split='train', transform=transform)
+
+# Use meaningful subset for demonstration
+subset_indices = list(range(100000))  # 100k samples for large-scale training
+dataset = torch.utils.data.Subset(dataset, subset_indices)
 
 # Generate curriculum weights using DINO (recommended)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -95,93 +105,59 @@ difficulty_weights, curriculum = create_curriculum_learning_with_dino(
     dataset=dataset,
     device=device,
     dino_model='dino_vits16',  # Default DINO variant
-    initial_effective_percentage=0.3,  # Start with 30% of dataset
-    warmup_iterations=1000  # Warmup for 1000 iterations
+    batch_size=256,  # Large batch for efficiency
+    initial_effective_percentage=0.15,  # Start with 15% of dataset
+    warmup_iterations=5000  # Warmup for 5000 iterations
 )
 
-# Use weights for training with curriculum progression
-from torch.utils.data import WeightedRandomSampler
-curriculum_weights = curriculum.get_curriculum_weights(
-    temperature=0.5, 
-    strategy='difficulty',
-    current_iteration=current_iter,
-    warmup_iterations=1000
-)
-sampler = WeightedRandomSampler(curriculum_weights, len(dataset), replacement=True)
-train_loader = DataLoader(dataset, batch_size=32, sampler=sampler)
+# Training loop with curriculum progression (temperature computed automatically)
+for epoch in range(num_epochs):
+    for i, (batch_data, batch_labels) in enumerate(train_loader):
+        current_iter = epoch * len(train_loader) + i
+        
+        # Get curriculum weights for current iteration (temperature automatic)
+        curriculum_weights = curriculum.get_curriculum_weights(
+            strategy='difficulty',
+            current_iteration=current_iter
+        )
+        
+        # Update sampler with new weights
+        sampler = WeightedRandomSampler(curriculum_weights, len(dataset), replacement=True)
+        
+        # Your training code here
+        train_step(batch_data, batch_labels)
 ```
 
-### Alternative: Custom Model
+### Multi-Domain Applications
 
 ```python
-import torch
-import torchvision
-from curriculum_learning import create_curriculum_learning
-
-# Load your pretrained model
-model = torchvision.models.resnet50(pretrained=True)
-model = torch.nn.Sequential(*list(model.children())[:-1])  # Remove classifier
-
-# Load your dataset
-dataset = torchvision.datasets.CIFAR10(root='./data', train=True, transform=transforms)
-
-# Generate curriculum weights
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-difficulty_weights, curriculum = create_curriculum_learning(
-    model=model,
-    dataset=dataset,
+# Image Generation Example (ImageNet-scale)
+weights, curriculum = create_curriculum_learning_with_dino(
+    dataset=imagenet_dataset,
     device=device,
-    initial_effective_percentage=0.25,  # Start with 25% of dataset
-    warmup_iterations=500
+    batch_size=128,
+    initial_effective_percentage=0.2,  # Start with prototypical images
+    warmup_iterations=3000
 )
 
-# Use weights for training
-from torch.utils.data import WeightedRandomSampler
-curriculum_weights = curriculum.get_curriculum_weights(
-    temperature=0.5, 
-    strategy='difficulty',
-    current_iteration=current_iter,
-    warmup_iterations=500
-)
-sampler = WeightedRandomSampler(curriculum_weights, len(dataset), replacement=True)
-train_loader = DataLoader(dataset, batch_size=32, sampler=sampler)
-```
-
-### Advanced Usage
-
-```python
-from curriculum_learning import CurriculumLearning, PretrainedModelExtractor
-import timm
-
-# Create DINO model
-model = timm.create_model('dino_vits16', pretrained=True, num_classes=0)
-
-# Create custom feature extractor
-extractor = PretrainedModelExtractor(
-    model=model,
-    feature_layer=None,  # Use final features
-    normalize_features=True
+# Audio Pretraining Example (Large-scale)
+weights, curriculum = create_curriculum_learning_with_dino(
+    dataset=audio_spectrogram_dataset,
+    device=device,
+    batch_size=128,
+    initial_effective_percentage=0.12,  # Start with simpler audio patterns
+    warmup_iterations=4000  # Longer warmup for temporal patterns
 )
 
-# Configure curriculum learning with large-scale optimizations
-curriculum = CurriculumLearning(
-    feature_extractor=extractor,
-    n_clusters=None,  # Auto-select optimal number
-    auto_select_clusters=True,
-    cluster_range=(5, 30),
-    use_labels=True,  # Supervised clustering
-    normalize_weights=True,
-    batch_size=512,  # Large batch for efficiency
-    initial_effective_percentage=0.2,  # Start with 20% of dataset
-    warmup_iterations=2000  # Longer warmup for large datasets
+# Tokenizer Training Example (Large-scale)
+weights, curriculum = create_curriculum_learning(
+    model=text_embedding_model,
+    dataset=text_dataset, 
+    device=device,
+    batch_size=256,
+    initial_effective_percentage=0.08,  # Start with common patterns
+    warmup_iterations=8000  # Long warmup for linguistic complexity
 )
-
-# Fit and extract weights
-curriculum.fit(dataset, device=device)
-weights = curriculum.get_difficulty_weights()
-
-# Save weights for later use
-curriculum.save_weights('my_curriculum_weights.npy')
 ```
 
 ## API Reference
@@ -208,9 +184,18 @@ The main class for curriculum learning.
 
 - `fit(dataset, labels=None, device='cpu')`: Fit the model and compute weights
 - `get_difficulty_weights()`: Get raw difficulty weights
-- `get_curriculum_weights(temperature=1.0, strategy='difficulty', current_iteration=0, warmup_iterations=None)`: Get curriculum weights for sampling
+- `get_curriculum_weights(strategy='difficulty', current_iteration=0, warmup_iterations=None, min_temp=0.3, max_temp=2.0)`: Get curriculum weights with automatic temperature computation
 - `save_weights(filepath)`: Save computed weights
 - `load_weights(filepath)`: Load weights from file
+
+### Automatic Temperature Computation
+
+🆕 **New Feature**: Temperature is now computed automatically based on effective dataset size!
+
+- **Early training** (small effective dataset): Higher temperature = more uniform sampling
+- **Later training** (large effective dataset): Lower temperature = more focused sampling
+- **Customizable range**: Use `min_temp` and `max_temp` parameters to control the temperature range
+- **No manual tuning**: Users no longer need to manually set temperature values
 
 ### PretrainedModelExtractor
 
@@ -260,102 +245,18 @@ Convenience function specifically for DINO models.
 
 - `(difficulty_weights, curriculum_instance)`: Tuple of weights and curriculum object
 
-## Examples
-
-### Example 1: Large-Scale Training with DINO
-
-```python
-from curriculum_learning import create_curriculum_learning_with_dino
-
-# Optimize for large-scale training
-weights, curriculum = create_curriculum_learning_with_dino(
-    dataset=large_dataset,  # Millions of samples
-    n_clusters=None,  # Auto-select optimal number
-    use_labels=False,  # Unsupervised clustering
-    device=device,
-    dino_model='dino_vits16',
-    batch_size=1024,  # Large batch for efficiency
-    initial_effective_percentage=0.1,  # Start with 10% for very large datasets
-    warmup_iterations=5000,  # Longer warmup for stability
-    use_minibatch_kmeans=True  # Essential for large datasets
-)
-
-print(f"Optimal clusters: {curriculum.optimal_clusters_}")
-print(f"Training acceleration: Focus on {curriculum.initial_effective_percentage*100}% of data initially")
-```
-
-### Example 2: Audio Pretraining Application
-
-```python
-from curriculum_learning import create_curriculum_learning_with_dino
-
-# Apply to audio pretraining (convert audio to spectrograms)
-audio_dataset = AudioSpectrogramDataset(root='./audio_data')
-
-weights, curriculum = create_curriculum_learning_with_dino(
-    dataset=audio_dataset,
-    device=device,
-    dino_model='dino_vits16',
-    initial_effective_percentage=0.2,  # Start with easier audio samples
-    warmup_iterations=2000,
-    n_clusters=15
-)
-
-# Use for audio model training
-print("Curriculum learning applied to audio pretraining!")
-```
-
-### Example 3: Progressive Training with Warmup
-
-```python
-# Training loop with curriculum progression
-for epoch in range(num_epochs):
-    for i, (batch_data, batch_labels) in enumerate(train_loader):
-        current_iter = epoch * len(train_loader) + i
-        
-        # Get curriculum weights for current iteration
-        curriculum_weights = curriculum.get_curriculum_weights(
-            temperature=0.5,
-            strategy='difficulty',
-            current_iteration=current_iter,
-            warmup_iterations=1000
-        )
-        
-        # Update sampler with new weights
-        sampler = WeightedRandomSampler(curriculum_weights, len(dataset), replacement=True)
-        
-        # Your training code here
-        train_step(batch_data, batch_labels)
-```
-
-### Example 4: Multi-Domain Research Application
-
-```python
-# Example for tokenizer training
-tokenizer_dataset = TokenizerTrainingDataset('./text_data')
-
-weights, curriculum = create_curriculum_learning_with_dino(
-    dataset=tokenizer_dataset,
-    device=device,
-    initial_effective_percentage=0.15,  # Start with simpler text patterns
-    warmup_iterations=3000
-)
-
-print("Curriculum learning for tokenizer training - focus on common patterns first!")
-```
-
 ## Best Practices
 
 ### 1. Large-Scale Training Optimization
-- **Batch Size**: Use larger batch sizes (512-1024) for better GPU utilization
+- **Batch Size**: Use larger batch sizes (256-512) for better GPU utilization and efficiency
 - **Memory Management**: Enable `use_minibatch_kmeans` for datasets >10k samples
-- **Initial Percentage**: Start with 10-30% for very large datasets
-- **Warmup Iterations**: Use longer warmup (2000-5000) for stability
+- **Initial Percentage**: Start with 10-20% for very large datasets (ImageNet-scale)
+- **Warmup Iterations**: Use longer warmup (3000-8000) for stability at scale
 
 ### 2. Domain-Specific Recommendations
-- **Image Generation**: Start with 20-30% of data, focus on prototypical examples
-- **Audio Pretraining**: Use 15-25% initially, longer warmup for temporal patterns
-- **Tokenizer Training**: Begin with 10-20%, emphasize common linguistic patterns
+- **Image Generation**: Start with 15-25% of data, focus on prototypical examples
+- **Audio Pretraining**: Use 10-15% initially, longer warmup for temporal patterns
+- **Tokenizer Training**: Begin with 8-12%, emphasize common linguistic patterns
 - **Language Models**: Use supervised clustering when possible
 
 ### 3. Model Selection (Recommended: DINO)
@@ -366,23 +267,29 @@ print("Curriculum learning for tokenizer training - focus on common patterns fir
 
 ### 4. Curriculum Progression
 - **Initial Effective Percentage**: 
-  - Small datasets (<10k): 30-50%
-  - Medium datasets (10k-100k): 20-30%  
-  - Large datasets (>100k): 10-20%
+  - Small datasets (<10k): 20-40%
+  - Medium datasets (10k-100k): 15-25%  
+  - Large datasets (>100k): 10-15%
 - **Warmup Iterations**: Scale with dataset size and complexity
+  - Small datasets: 1000-2000 iterations
+  - Medium datasets: 2000-5000 iterations
+  - Large datasets: 5000-10000 iterations
 
-### 5. Temperature Tuning
-- Lower temperature (0.1-0.5): More focused on difficult/easy samples
-- Higher temperature (1.0-2.0): More uniform sampling
-- Start with 0.5 and adjust based on training performance
+### 5. Automatic Temperature (New!)
+- **No manual tuning required**: Temperature is automatically computed based on effective dataset size
+- **Adaptive behavior**: Higher temperature for small effective datasets (exploration), lower for large (exploitation)
+- **Customizable range**: Use `min_temp=0.3` to `max_temp=2.0` (defaults work well for most cases)
+- **Optimal progression**: Automatically transitions from uniform sampling to focused sampling
 
 ## Performance Tips
 
 1. **GPU Usage**: Always use GPU for feature extraction when available
-2. **Batch Processing**: Larger batch sizes are more efficient for feature extraction
+2. **Batch Processing**: Larger batch sizes are more efficient for feature extraction and training
 3. **Feature Caching**: Save computed weights to avoid recomputation
 4. **Memory Optimization**: Use MiniBatchKMeans for datasets >10k samples
-5. **Progressive Training**: Gradually increase effective dataset percentage during training
+5. **Progressive Training**: Let automatic temperature handle the curriculum progression
+6. **Large-Scale Datasets**: Use ImageNet or similar scale datasets for realistic evaluation
+7. **Multi-GPU Training**: Scale batch sizes appropriately for multi-GPU setups
 
 ## Citation
 
@@ -400,6 +307,3 @@ If you use this library in your research, please cite our CVPR 2025 paper:
 
 **Paper Link**: [From Prototypes to General Distributions: An Efficient Curriculum for Masked Image Modeling](https://openaccess.thecvf.com/content/CVPR2025/papers/Lin_From_Prototypes_to_General_Distributions_An_Efficient_Curriculum_for_Masked_CVPR_2025_paper.pdf)
 
-## License
-
-MIT License - see LICENSE file for details. 
