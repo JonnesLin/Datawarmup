@@ -2,7 +2,7 @@
 📖 [Read the Paper](https://openaccess.thecvf.com/content/CVPR2025/papers/Lin_From_Prototypes_to_General_Distributions_An_Efficient_Curriculum_for_Masked_CVPR_2025_paper.pdf)
 
 
-This PyTorch library implements a **difficulty-based curriculum learning framework** designed for **self-supervised learning at scale**. It enables progressive training by automatically prioritizing simpler samples before gradually including more complex data.
+This PyTorch library implements a **Prototypes-based curriculum learning framework** designed for **self-supervised learning at scale**. It enables progressive training by automatically prioritizing simpler samples before gradually including more complex data.
 
 ---
 
