@@ -236,49 +236,11 @@ Convenience function specifically for DINO models.
 
 ## Best Practices
 
-### 1. Large-Scale Training Optimization
-- **Batch Size**: Use larger batch sizes (256-512) for better GPU utilization and efficiency
-- **Memory Management**: Enable `use_minibatch_kmeans` for datasets >10k samples
-- **Initial Percentage**: Start with 10-20% for very large datasets (ImageNet-scale)
-- **Warmup Iterations**: Use longer warmup (3000-8000) for stability at scale
-
-### 2. Domain-Specific Recommendations
-- **Image Generation**: Start with 15-25% of data, focus on prototypical examples
-- **Audio Pretraining**: Use 10-15% initially, longer warmup for temporal patterns
-- **Tokenizer Training**: Begin with 8-12%, emphasize common linguistic patterns
-- **Language Models**: Use supervised clustering when possible
-
-### 3. Model Selection (Recommended: DINO)
-- **DINO models** (recommended): Excellent for curriculum learning with superior feature representations
-  - `dino_vits16`: Good balance of performance and speed 
-  - `dino_vitb16`: Better features but slower
-  - `dino_vits8`: Faster but smaller patches
-
-### 4. Curriculum Progression
-- **Initial Effective Percentage**: 
-  - Small datasets (<10k): 20-40%
-  - Medium datasets (10k-100k): 15-25%  
-  - Large datasets (>100k): 10-15%
-- **Warmup Iterations**: Scale with dataset size and complexity
-  - Small datasets: 1000-2000 iterations
-  - Medium datasets: 2000-5000 iterations
-  - Large datasets: 5000-10000 iterations
-
-### 5. Automatic Temperature (New!)
+### Automatic Temperature 
 - **No manual tuning required**: Temperature is automatically computed based on effective dataset size
 - **Adaptive behavior**: Higher temperature for small effective datasets (exploration), lower for large (exploitation)
 - **Customizable range**: Use `min_temp=0.3` to `max_temp=2.0` (defaults work well for most cases)
 - **Optimal progression**: Automatically transitions from uniform sampling to focused sampling
-
-## Performance Tips
-
-1. **GPU Usage**: Always use GPU for feature extraction when available
-2. **Batch Processing**: Larger batch sizes are more efficient for feature extraction and training
-3. **Feature Caching**: Save computed weights to avoid recomputation
-4. **Memory Optimization**: Use MiniBatchKMeans for datasets >10k samples
-5. **Progressive Training**: Let automatic temperature handle the curriculum progression
-6. **Large-Scale Datasets**: Use ImageNet or similar scale datasets for realistic evaluation
-7. **Multi-GPU Training**: Scale batch sizes appropriately for multi-GPU setups
 
 ## Citation
 
