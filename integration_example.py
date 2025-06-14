@@ -96,8 +96,14 @@ def train_with_curriculum_progression(model, train_loader, test_loader, curricul
         effective_percentage = active_samples / len(curriculum_weights)
         effective_percentages.append(effective_percentage)
         
-        # Show automatic temperature computation
-        auto_temp = curriculum._compute_temperature(effective_percentage)
+        # Check if we're in uniform distribution phase (after curriculum learning)
+        if iteration >= curriculum.warmup_iterations:
+            auto_temp = None  # Not applicable in uniform phase
+            temp_display = "N/A (uniform)"
+        else:
+            # During curriculum learning: show automatic temperature computation
+            auto_temp = curriculum._compute_temperature(effective_percentage, strategy='difficulty')
+            temp_display = f"{auto_temp:.3f}"
         
         # Create new sampler with updated weights
         sampler = WeightedRandomSampler(
@@ -133,7 +139,7 @@ def train_with_curriculum_progression(model, train_loader, test_loader, curricul
             pbar.set_postfix({
                 'Loss': f'{loss.item():.4f}',
                 'Effective': f'{effective_percentage:.1%}',
-                'Auto Temp': f'{auto_temp:.3f}',
+                'Auto Temp': temp_display,
                 'Iter': iteration
             })
         
@@ -145,7 +151,7 @@ def train_with_curriculum_progression(model, train_loader, test_loader, curricul
         
         print(f"Epoch {epoch+1}: Loss={avg_epoch_loss:.4f}, "
               f"Test Acc={test_accuracy:.2%}, Effective Data={effective_percentage:.1%}, "
-              f"Auto Temp={auto_temp:.3f}")
+              f"Auto Temp={temp_display}")
     
     return epoch_losses, effective_percentages
 
@@ -305,8 +311,14 @@ def audio_pretraining_example():
         )
         active = (curr_weights > 1e-5).sum()
         percentage = active / len(curr_weights)
-        auto_temp = curriculum._compute_temperature(percentage)
-        print(f"  Iteration {iter_num:4d}: {percentage:.1%} active ({active} samples), Auto temp = {auto_temp:.3f}")
+        
+        # Check if we're in uniform distribution phase (after curriculum learning)
+        if iter_num >= curriculum.warmup_iterations:
+            print(f"  Iteration {iter_num:4d}: UNIFORM DISTRIBUTION (post-curriculum) - All samples equal weight")
+        else:
+            # During curriculum learning: show automatic temperature computation
+            auto_temp = curriculum._compute_temperature(percentage, strategy='difficulty')
+            print(f"  Iteration {iter_num:4d}: {percentage:.1%} active ({active} samples), Auto temp = {auto_temp:.3f}")
     
     return curriculum
 
@@ -378,8 +390,14 @@ def tokenizer_training_example():
         active = (curr_weights > 1e-5).sum()
         percentage = active / len(curr_weights)
         phase = "Warmup" if iter_num < 4000 else "Post-warmup"
-        auto_temp = curriculum._compute_temperature(percentage)
-        print(f"  Iteration {iter_num:4d} ({phase:10s}): {percentage:.1%} active, Auto temp = {auto_temp:.3f}")
+        
+        # Check if we're in uniform distribution phase (after curriculum learning)
+        if iter_num >= curriculum.warmup_iterations:
+            print(f"  Iteration {iter_num:4d} ({phase:10s}): UNIFORM DISTRIBUTION (post-curriculum)")
+        else:
+            # During curriculum learning: show automatic temperature computation
+            auto_temp = curriculum._compute_temperature(percentage, strategy='difficulty')
+            print(f"  Iteration {iter_num:4d} ({phase:10s}): {percentage:.1%} active, Auto temp = {auto_temp:.3f}")
     
     return curriculum
 
