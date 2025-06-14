@@ -1,19 +1,71 @@
 # Curriculum Learning Library
 
-A ready-to-use curriculum learning library that uses K-means clustering on pretrained model features to generate difficulty-based sample weights for improved training.
+**🚀 Welcome researchers from diverse fields!** This curriculum learning library is designed to accelerate training across various domains:
+
+### 🌟 Research Applications
+
+**Unlock the power of intelligent sample selection for your research!** This curriculum learning library supports:
+
+#### Vision & Multimodal Research
+- **🖼️ Image Generation**: Diffusion models, GANs, VAEs - focus on simple patterns first
+- **🎭 Masked Image Modeling**: MAE, SimMIM, BEiT - learn from prototypical examples
+- **🔍 Object Detection**: YOLO, R-CNN, DETR - start with clear, well-defined objects
+- **✂️ Image Segmentation**: U-Net, Mask R-CNN - progress from simple to complex boundaries
+- **🎥 Video Understanding**: Action recognition, temporal modeling - build from basic motions
+
+#### Audio & Speech Research  
+- **🎵 Audio Pretraining**: Wav2Vec, HuBERT, WavLM - learn fundamental audio patterns first
+- **🗣️ Speech Recognition**: Whisper, DeepSpeech - start with clear pronunciation
+- **🎼 Music Generation**: Jukebox, MusicLM - understand basic musical structures
+- **🔊 Audio Classification**: Environmental sounds, music genres - recognize distinct patterns
+
+#### Natural Language Processing
+- **🔤 Tokenizer Training**: BPE, SentencePiece, WordPiece - learn common patterns first
+- **📚 Language Model Pretraining**: BERT, GPT, T5 - build from simple to complex language
+- **🌐 Machine Translation**: Transformer models - start with direct word mappings
+- **📝 Text Classification**: BERT-based models - learn clear category distinctions
+
+#### Specialized Domains
+- **🎮 Reinforcement Learning**: Experience replay prioritization
+- **🕸️ Graph Neural Networks**: Node/edge difficulty assessment  
+- **📈 Time Series**: Sequence complexity modeling
+- **🏥 Medical Imaging**: Pathology detection, medical classification
+
+---
+
+A ready-to-use curriculum learning library that uses K-means clustering on pretrained model features to generate difficulty-based sample weights for **efficient large-scale training**. 
+
+**🚀 Accelerate your training with intelligent sample selection - achieve better results with less computational cost!**
+
+**Based on the CVPR 2025 paper: "From Prototypes to General Distributions: An Efficient Curriculum for Masked Image Modeling"**
+
+## 🎯 Large-Scale Training Efficiency
+
+This library is specifically designed to **accelerate large-scale training** by:
+- **Reducing training time**: Focus on the most informative samples first
+- **Improving convergence**: Structured learning progression prevents getting stuck in local minima  
+- **Scaling efficiently**: Optimized for datasets with millions of samples
+- **Memory optimization**: Intelligent batching and MiniBatch K-means for large datasets
+- **GPU acceleration**: Fully optimized for multi-GPU training workflows
 
 ## Overview
 
-This library implements a curriculum learning approach where:
-1. **Feature Extraction**: Features are extracted from your data using any pretrained model
+This library implements a curriculum learning approach inspired by our CVPR 2025 research on improving Masked Image Modeling (MIM) through prototype-driven curriculum learning. The core methodology:
+
+1. **Feature Extraction**: Features are extracted from your data using any pretrained model (DINO recommended)
 2. **Clustering**: K-means clustering groups similar samples together
 3. **Difficulty Assessment**: Samples farther from cluster centers are considered more difficult
-4. **Curriculum Weights**: Generated weights can be used for weighted sampling during training
+4. **Curriculum Weights**: Generated weights enable progressive training from easy to hard samples
+
+Our approach addresses the fundamental challenge in MIM where models are expected to learn complex distributions from partial observations before developing basic capabilities. By structuring the learning process to progress from prototypical examples to complex variations, we achieve more efficient and stable learning trajectories.
 
 ## Key Features
 
+- ✅ **Large-Scale Optimized**: Handles millions of samples with efficient memory management
+- ✅ **DINO Integration**: Default support for DINO models (recommended for best performance)
 - ✅ **Universal Compatibility**: Works with any PyTorch model and dataset
 - ✅ **Auto-Cluster Selection**: Automatically finds optimal number of clusters using Davies-Bouldin index
+- ✅ **Curriculum Control**: Configurable initial dataset percentage and warmup iterations
 - ✅ **Supervised & Unsupervised**: Supports both clustering approaches
 - ✅ **Memory Efficient**: Handles large datasets with batched processing
 - ✅ **Intermediate Features**: Extract features from any model layer
@@ -27,7 +79,39 @@ pip install -r curriculum_requirements.txt
 
 ## Quick Start
 
-### Basic Usage
+### Basic Usage with DINO (Recommended)
+
+```python
+import torch
+import torchvision
+from curriculum_learning import create_curriculum_learning_with_dino
+
+# Load your dataset
+dataset = torchvision.datasets.CIFAR10(root='./data', train=True, transform=transforms)
+
+# Generate curriculum weights using DINO (recommended)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+difficulty_weights, curriculum = create_curriculum_learning_with_dino(
+    dataset=dataset,
+    device=device,
+    dino_model='dino_vits16',  # Default DINO variant
+    initial_effective_percentage=0.3,  # Start with 30% of dataset
+    warmup_iterations=1000  # Warmup for 1000 iterations
+)
+
+# Use weights for training with curriculum progression
+from torch.utils.data import WeightedRandomSampler
+curriculum_weights = curriculum.get_curriculum_weights(
+    temperature=0.5, 
+    strategy='difficulty',
+    current_iteration=current_iter,
+    warmup_iterations=1000
+)
+sampler = WeightedRandomSampler(curriculum_weights, len(dataset), replacement=True)
+train_loader = DataLoader(dataset, batch_size=32, sampler=sampler)
+```
+
+### Alternative: Custom Model
 
 ```python
 import torch
@@ -46,12 +130,19 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 difficulty_weights, curriculum = create_curriculum_learning(
     model=model,
     dataset=dataset,
-    device=device
+    device=device,
+    initial_effective_percentage=0.25,  # Start with 25% of dataset
+    warmup_iterations=500
 )
 
 # Use weights for training
 from torch.utils.data import WeightedRandomSampler
-curriculum_weights = curriculum.get_curriculum_weights(temperature=0.5, strategy='difficulty')
+curriculum_weights = curriculum.get_curriculum_weights(
+    temperature=0.5, 
+    strategy='difficulty',
+    current_iteration=current_iter,
+    warmup_iterations=500
+)
 sampler = WeightedRandomSampler(curriculum_weights, len(dataset), replacement=True)
 train_loader = DataLoader(dataset, batch_size=32, sampler=sampler)
 ```
@@ -60,15 +151,19 @@ train_loader = DataLoader(dataset, batch_size=32, sampler=sampler)
 
 ```python
 from curriculum_learning import CurriculumLearning, PretrainedModelExtractor
+import timm
+
+# Create DINO model
+model = timm.create_model('dino_vits16', pretrained=True, num_classes=0)
 
 # Create custom feature extractor
 extractor = PretrainedModelExtractor(
-    model=your_model,
-    feature_layer='layer3',  # Extract from intermediate layer
+    model=model,
+    feature_layer=None,  # Use final features
     normalize_features=True
 )
 
-# Configure curriculum learning
+# Configure curriculum learning with large-scale optimizations
 curriculum = CurriculumLearning(
     feature_extractor=extractor,
     n_clusters=None,  # Auto-select optimal number
@@ -76,7 +171,9 @@ curriculum = CurriculumLearning(
     cluster_range=(5, 30),
     use_labels=True,  # Supervised clustering
     normalize_weights=True,
-    batch_size=128
+    batch_size=512,  # Large batch for efficiency
+    initial_effective_percentage=0.2,  # Start with 20% of dataset
+    warmup_iterations=2000  # Longer warmup for large datasets
 )
 
 # Fit and extract weights
@@ -103,13 +200,15 @@ The main class for curriculum learning.
 - `normalize_weights`: Normalize difficulty weights (default: True)
 - `batch_size`: Batch size for processing (default: 256)
 - `use_minibatch_kmeans`: Use MiniBatchKMeans for large datasets (default: True)
+- `initial_effective_percentage`: Initial percentage of dataset to use (default: 0.3)
+- `warmup_iterations`: Number of warmup iterations for curriculum progression (default: 1000)
 - `random_state`: Random seed (default: 42)
 
 #### Methods
 
 - `fit(dataset, labels=None, device='cpu')`: Fit the model and compute weights
 - `get_difficulty_weights()`: Get raw difficulty weights
-- `get_curriculum_weights(temperature=1.0, strategy='difficulty')`: Get curriculum weights for sampling
+- `get_curriculum_weights(temperature=1.0, strategy='difficulty', current_iteration=0, warmup_iterations=None)`: Get curriculum weights for sampling
 - `save_weights(filepath)`: Save computed weights
 - `load_weights(filepath)`: Load weights from file
 
@@ -125,7 +224,7 @@ Feature extractor for PyTorch models.
 
 ### create_curriculum_learning()
 
-Convenience function for quick setup.
+Convenience function for quick setup with custom models.
 
 #### Parameters
 
@@ -134,6 +233,27 @@ Convenience function for quick setup.
 - `n_clusters`: Number of clusters
 - `use_labels`: Use supervised clustering
 - `device`: Computing device
+- `initial_effective_percentage`: Initial percentage of dataset to use (default: 0.3)
+- `warmup_iterations`: Number of warmup iterations (default: 1000)
+- `**kwargs`: Additional CurriculumLearning parameters
+
+#### Returns
+
+- `(difficulty_weights, curriculum_instance)`: Tuple of weights and curriculum object
+
+### create_curriculum_learning_with_dino() (Recommended)
+
+Convenience function specifically for DINO models.
+
+#### Parameters
+
+- `dataset`: PyTorch dataset
+- `n_clusters`: Number of clusters (None for auto-selection)
+- `use_labels`: Use supervised clustering
+- `device`: Computing device
+- `dino_model`: DINO variant ('dino_vits16', 'dino_vits8', 'dino_vitb16', 'dino_vitb8') 
+- `initial_effective_percentage`: Initial percentage of dataset to use (default: 0.3)
+- `warmup_iterations`: Number of warmup iterations (default: 1000)
 - `**kwargs`: Additional CurriculumLearning parameters
 
 #### Returns
@@ -142,111 +262,119 @@ Convenience function for quick setup.
 
 ## Examples
 
-### Example 1: Vision Transformer with Auto-Clustering
+### Example 1: Large-Scale Training with DINO
 
 ```python
-import timm
-from curriculum_learning import create_curriculum_learning
+from curriculum_learning import create_curriculum_learning_with_dino
 
-# Load Vision Transformer
-model = timm.create_model('vit_base_patch16_224', pretrained=True, num_classes=0)
-
-# Auto-select optimal clusters
-weights, curriculum = create_curriculum_learning(
-    model=model,
-    dataset=your_dataset,
-    n_clusters=None,  # Auto-select
-    cluster_range=(5, 25),
-    device=device
+# Optimize for large-scale training
+weights, curriculum = create_curriculum_learning_with_dino(
+    dataset=large_dataset,  # Millions of samples
+    n_clusters=None,  # Auto-select optimal number
+    use_labels=False,  # Unsupervised clustering
+    device=device,
+    dino_model='dino_vits16',
+    batch_size=1024,  # Large batch for efficiency
+    initial_effective_percentage=0.1,  # Start with 10% for very large datasets
+    warmup_iterations=5000,  # Longer warmup for stability
+    use_minibatch_kmeans=True  # Essential for large datasets
 )
 
 print(f"Optimal clusters: {curriculum.optimal_clusters_}")
+print(f"Training acceleration: Focus on {curriculum.initial_effective_percentage*100}% of data initially")
 ```
 
-### Example 2: Supervised Clustering per Class
+### Example 2: Audio Pretraining Application
 
 ```python
-from curriculum_learning import CurriculumLearning, PretrainedModelExtractor
+from curriculum_learning import create_curriculum_learning_with_dino
 
-extractor = PretrainedModelExtractor(model)
-curriculum = CurriculumLearning(
-    feature_extractor=extractor,
-    n_clusters=5,  # 5 clusters per class
-    use_labels=True,  # Cluster within each class
-    auto_select_clusters=False
+# Apply to audio pretraining (convert audio to spectrograms)
+audio_dataset = AudioSpectrogramDataset(root='./audio_data')
+
+weights, curriculum = create_curriculum_learning_with_dino(
+    dataset=audio_dataset,
+    device=device,
+    dino_model='dino_vits16',
+    initial_effective_percentage=0.2,  # Start with easier audio samples
+    warmup_iterations=2000,
+    n_clusters=15
 )
 
-curriculum.fit(dataset, device=device)
-weights = curriculum.get_difficulty_weights()
-
-# Analyze per-class difficulty
-labels = np.array(dataset.targets)
-for class_idx in range(num_classes):
-    class_mask = labels == class_idx
-    class_weights = weights[class_mask]
-    print(f"Class {class_idx} mean difficulty: {class_weights.mean():.4f}")
+# Use for audio model training
+print("Curriculum learning applied to audio pretraining!")
 ```
 
-### Example 3: Custom Feature Layer
+### Example 3: Progressive Training with Warmup
 
 ```python
-# Extract features from ResNet's layer3 instead of final layer
-extractor = PretrainedModelExtractor(
-    model=resnet_model,
-    feature_layer='layer3',
-    normalize_features=True
-)
-
-curriculum = CurriculumLearning(extractor, n_clusters=10)
-curriculum.fit(dataset, device=device)
+# Training loop with curriculum progression
+for epoch in range(num_epochs):
+    for i, (batch_data, batch_labels) in enumerate(train_loader):
+        current_iter = epoch * len(train_loader) + i
+        
+        # Get curriculum weights for current iteration
+        curriculum_weights = curriculum.get_curriculum_weights(
+            temperature=0.5,
+            strategy='difficulty',
+            current_iteration=current_iter,
+            warmup_iterations=1000
+        )
+        
+        # Update sampler with new weights
+        sampler = WeightedRandomSampler(curriculum_weights, len(dataset), replacement=True)
+        
+        # Your training code here
+        train_step(batch_data, batch_labels)
 ```
 
-### Example 4: Temperature and Strategy Effects
+### Example 4: Multi-Domain Research Application
 
 ```python
-# Get weights for different curriculum strategies
-easy_weights = curriculum.get_curriculum_weights(
-    temperature=0.5, 
-    strategy='easy'  # Focus on easier samples first
+# Example for tokenizer training
+tokenizer_dataset = TokenizerTrainingDataset('./text_data')
+
+weights, curriculum = create_curriculum_learning_with_dino(
+    dataset=tokenizer_dataset,
+    device=device,
+    initial_effective_percentage=0.15,  # Start with simpler text patterns
+    warmup_iterations=3000
 )
 
-hard_weights = curriculum.get_curriculum_weights(
-    temperature=0.5, 
-    strategy='difficulty'  # Focus on harder samples
-)
-
-# Lower temperature = more focused sampling
-focused_weights = curriculum.get_curriculum_weights(temperature=0.1)
-uniform_weights = curriculum.get_curriculum_weights(temperature=2.0)
+print("Curriculum learning for tokenizer training - focus on common patterns first!")
 ```
 
 ## Best Practices
 
-### 1. Model Selection
-- Use pretrained models for better feature representations
-- For images: ResNet, EfficientNet, Vision Transformers work well
-- For text: BERT, RoBERTa, etc.
-- For other domains: Any pretrained model in your domain
+### 1. Large-Scale Training Optimization
+- **Batch Size**: Use larger batch sizes (512-1024) for better GPU utilization
+- **Memory Management**: Enable `use_minibatch_kmeans` for datasets >10k samples
+- **Initial Percentage**: Start with 10-30% for very large datasets
+- **Warmup Iterations**: Use longer warmup (2000-5000) for stability
 
-### 2. Cluster Selection
-- Start with auto-selection to find optimal number
-- For supervised clustering: 3-10 clusters per class typically work well
-- For unsupervised: 10-50 clusters depending on dataset size
+### 2. Domain-Specific Recommendations
+- **Image Generation**: Start with 20-30% of data, focus on prototypical examples
+- **Audio Pretraining**: Use 15-25% initially, longer warmup for temporal patterns
+- **Tokenizer Training**: Begin with 10-20%, emphasize common linguistic patterns
+- **Language Models**: Use supervised clustering when possible
 
-### 3. Temperature Tuning
+### 3. Model Selection (Recommended: DINO)
+- **DINO models** (recommended): Excellent for curriculum learning with superior feature representations
+  - `dino_vits16`: Good balance of performance and speed 
+  - `dino_vitb16`: Better features but slower
+  - `dino_vits8`: Faster but smaller patches
+
+### 4. Curriculum Progression
+- **Initial Effective Percentage**: 
+  - Small datasets (<10k): 30-50%
+  - Medium datasets (10k-100k): 20-30%  
+  - Large datasets (>100k): 10-20%
+- **Warmup Iterations**: Scale with dataset size and complexity
+
+### 5. Temperature Tuning
 - Lower temperature (0.1-0.5): More focused on difficult/easy samples
 - Higher temperature (1.0-2.0): More uniform sampling
 - Start with 0.5 and adjust based on training performance
-
-### 4. Memory Management
-- Use `batch_size` parameter to control memory usage
-- Enable `use_minibatch_kmeans` for large datasets (>10k samples)
-- Consider using intermediate layers for very large models
-
-### 5. Integration with Training
-- Update curriculum weights periodically during training
-- Start with easier samples, gradually focus on harder ones
-- Monitor training metrics to adjust temperature
 
 ## Performance Tips
 
@@ -254,33 +382,23 @@ uniform_weights = curriculum.get_curriculum_weights(temperature=2.0)
 2. **Batch Processing**: Larger batch sizes are more efficient for feature extraction
 3. **Feature Caching**: Save computed weights to avoid recomputation
 4. **Memory Optimization**: Use MiniBatchKMeans for datasets >10k samples
-
-## Troubleshooting
-
-**Q: Out of memory during feature extraction**
-A: Reduce `batch_size` parameter or use a smaller model
-
-**Q: Clustering takes too long**
-A: Enable `use_minibatch_kmeans` or reduce `cluster_range`
-
-**Q: Poor curriculum weights**
-A: Try different `n_clusters` values or switch between supervised/unsupervised
-
-**Q: Model outputs wrong format**
-A: Ensure your model outputs feature vectors, not classifications
+5. **Progressive Training**: Gradually increase effective dataset percentage during training
 
 ## Citation
 
-If you use this library in your research, please cite:
+If you use this library in your research, please cite our CVPR 2025 paper:
 
 ```bibtex
-@software{curriculum_learning_library,
-  title={Curriculum Learning with K-means Clustering},
-  author={Your Name},
-  year={2024},
-  url={https://github.com/your-repo/curriculum-learning}
+@inproceedings{lin2025prototypes,
+  title={From Prototypes to General Distributions: An Efficient Curriculum for Masked Image Modeling},
+  author={Lin, Jinhong and Wu, Cheng-En and Li, Huanran and Zhang, Jifan and Hu, Yu Hen and Morgado, Pedro},
+  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year={2025},
+  url={https://openaccess.thecvf.com/content/CVPR2025/papers/Lin_From_Prototypes_to_General_Distributions_An_Efficient_Curriculum_for_Masked_CVPR_2025_paper.pdf}
 }
 ```
+
+**Paper Link**: [From Prototypes to General Distributions: An Efficient Curriculum for Masked Image Modeling](https://openaccess.thecvf.com/content/CVPR2025/papers/Lin_From_Prototypes_to_General_Distributions_An_Efficient_Curriculum_for_Masked_CVPR_2025_paper.pdf)
 
 ## License
 
