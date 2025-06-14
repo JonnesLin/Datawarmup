@@ -1,4 +1,4 @@
-# Curriculum Learning Library
+# From Prototypes to General Distributions: An Efficient Curriculum for Masked Image Modeling
 
 **🚀 Welcome researchers from diverse fields!** This curriculum learning library is designed to accelerate training across various domains:
 
