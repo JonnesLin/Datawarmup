@@ -382,18 +382,98 @@ class CurriculumLearning:
             raise ValueError("Model has not been fitted yet. Call fit() first.")
         return self.weights_.copy()
     
-    def _compute_temperature(self, effective_percentage: float, 
-                           min_temp: float = 0.3, max_temp: float = 2.0) -> float:
+    def _compute_effective_dataset_size(self, weights: np.ndarray, temperature: float, 
+                                       strategy: str = 'difficulty') -> float:
         """
-        Automatically compute temperature based on effective dataset percentage
+        Compute the effective dataset size given weights and temperature
         
-        Uses inverse relationship: smaller effective dataset = higher temperature (more uniform)
-        larger effective dataset = lower temperature (more focused)
+        Args:
+            weights: Difficulty weights
+            temperature: Temperature parameter for softmax
+            strategy: 'difficulty' or 'easy'
+        
+        Returns:
+            Effective dataset size as a percentage (0.0 to 1.0)
+        """
+        if strategy == 'difficulty':
+            softmax_weights = torch.softmax(torch.tensor(weights) / temperature, dim=0).numpy()
+        else:  # strategy == 'easy'
+            softmax_weights = torch.softmax(-torch.tensor(weights) / temperature, dim=0).numpy()
+        
+        # Compute effective dataset size using entropy-based measure
+        # Higher entropy = more uniform = larger effective size
+        entropy = -np.sum(softmax_weights * np.log(softmax_weights + 1e-8))
+        max_entropy = np.log(len(weights))  # Maximum possible entropy (uniform distribution)
+        effective_size = entropy / max_entropy
+        
+        return effective_size
+    
+    def _find_temperature_for_effective_size(self, target_effective_size: float, 
+                                           strategy: str = 'difficulty',
+                                           temp_range: Tuple[float, float] = (0.1, 5.0),
+                                           tolerance: float = 0.01,
+                                           max_iterations: int = 50) -> float:
+        """
+        Use binary search to find temperature that achieves target effective dataset size
+        
+        Args:
+            target_effective_size: Target effective dataset size (0.0 to 1.0)
+            strategy: 'difficulty' or 'easy'
+            temp_range: Range of temperatures to search within
+            tolerance: Tolerance for convergence
+            max_iterations: Maximum number of binary search iterations
+        
+        Returns:
+            Temperature that achieves the target effective dataset size
+        """
+        if self.weights_ is None:
+            raise ValueError("Model has not been fitted yet. Call fit() first.")
+        
+        low_temp, high_temp = temp_range
+        
+        for _ in range(max_iterations):
+            mid_temp = (low_temp + high_temp) / 2
+            current_effective_size = self._compute_effective_dataset_size(
+                self.weights_, mid_temp, strategy
+            )
+            
+            if abs(current_effective_size - target_effective_size) < tolerance:
+                return mid_temp
+            
+            if current_effective_size < target_effective_size:
+                # Need higher temperature for larger effective size
+                low_temp = mid_temp
+            else:
+                # Need lower temperature for smaller effective size  
+                high_temp = mid_temp
+        
+        # Return the best approximation
+        return (low_temp + high_temp) / 2
+    
+    def _compute_max_temperature(self, strategy: str = 'difficulty') -> float:
+        """
+        Compute the maximum temperature by finding temperature for theoretical max effective dataset size (1.0)
+        
+        Args:
+            strategy: 'difficulty' or 'easy'
+            
+        Returns:
+            Maximum temperature for theoretical max effective dataset size
+        """
+        return self._find_temperature_for_effective_size(
+            target_effective_size=1.0,
+            strategy=strategy,
+            temp_range=(0.1, 10.0)  # Extended range for max temperature
+        )
+
+    def _compute_temperature(self, effective_percentage: float, 
+                           strategy: str = 'difficulty') -> float:
+        """
+        Automatically compute temperature based on effective dataset percentage using binary search
         
         Args:
             effective_percentage: Current effective dataset percentage (0.0 to 1.0)
-            min_temp: Minimum temperature (when dataset is fully effective)
-            max_temp: Maximum temperature (when dataset is minimally effective)
+            strategy: 'difficulty' or 'easy'
         
         Returns:
             Computed temperature value
@@ -401,16 +481,17 @@ class CurriculumLearning:
         # Clamp effective_percentage to valid range
         effective_percentage = max(0.0, min(1.0, effective_percentage))
         
-        # Inverse relationship: high percentage = low temperature
-        temperature = min_temp + (max_temp - min_temp) * (1.0 - effective_percentage)
+        # Use binary search to find temperature for the target effective size
+        temperature = self._find_temperature_for_effective_size(
+            target_effective_size=effective_percentage,
+            strategy=strategy
+        )
         
         return temperature
 
     def get_curriculum_weights(self, strategy: str = 'difficulty',
                              current_iteration: int = 0,
-                             warmup_iterations: Optional[int] = None,
-                             min_temp: float = 0.3,
-                             max_temp: float = 2.0) -> np.ndarray:
+                             warmup_iterations: Optional[int] = None) -> np.ndarray:
         """
         Get curriculum weights for training with curriculum progression and automatic temperature
         
@@ -419,8 +500,6 @@ class CurriculumLearning:
                      'easy' (easier samples get higher weight)
             current_iteration: Current training iteration for curriculum progression
             warmup_iterations: Number of warmup iterations (uses instance default if None)
-            min_temp: Minimum temperature for automatic computation (default: 0.3)
-            max_temp: Maximum temperature for automatic computation (default: 2.0)
         
         Returns:
             Curriculum weights for sampling with curriculum progression
@@ -434,50 +513,39 @@ class CurriculumLearning:
         
         weights = self.weights_.copy()
         
+        # After curriculum learning stage: return uniform distribution (multiply by 0 + 1)
+        if current_iteration >= warmup_iterations:
+            # Uniform distribution: all samples have equal weight
+            n_samples = len(weights)
+            uniform_weights = np.ones(n_samples) 
+            return uniform_weights
+        
+        # During curriculum learning stage: use temperature-based curriculum
         # Calculate curriculum progression factor and effective percentage
-        if current_iteration < warmup_iterations and warmup_iterations > 0:
-            # During warmup, gradually increase effective dataset percentage
-            progress = current_iteration / warmup_iterations
-            current_effective_percentage = (
-                self.initial_effective_percentage + 
-                (1.0 - self.initial_effective_percentage) * progress
-            )
-        else:
-            current_effective_percentage = 1.0
+        progress = current_iteration / warmup_iterations if warmup_iterations > 0 else 1.0
+        current_effective_percentage = (
+            self.initial_effective_percentage + 
+            (1.0 - self.initial_effective_percentage) * progress
+        )
         
         # Automatically compute temperature based on effective dataset size
         temperature = self._compute_temperature(
-            current_effective_percentage, min_temp, max_temp
+            current_effective_percentage, strategy
         )
         
-        # Calculate curriculum progression factor
-        if current_iteration < warmup_iterations and warmup_iterations > 0:
-            # During warmup: gradually transition from easy to target strategy
-            progress = current_iteration / warmup_iterations
-            
-            # Start with easier samples and gradually include harder ones
-            if strategy == 'difficulty':
-                # Blend from easy to difficulty strategy
-                easy_weights = torch.softmax(-torch.tensor(weights) / temperature, dim=0).numpy()
-                hard_weights = torch.softmax(torch.tensor(weights) / temperature, dim=0).numpy()
-                curriculum_weights = (1 - progress) * easy_weights + progress * hard_weights
-            else:  # strategy == 'easy'
-                # For easy strategy, just use easy weights throughout warmup
-                curriculum_weights = torch.softmax(-torch.tensor(weights) / temperature, dim=0).numpy()
+        # Calculate curriculum weights based on strategy
+        if strategy == 'difficulty':
+            # Higher difficulty = higher weight
+            curriculum_weights = torch.softmax(
+                torch.tensor(weights) / temperature, dim=0
+            ).numpy()
+        elif strategy == 'easy':
+            # Lower difficulty = higher weight
+            curriculum_weights = torch.softmax(
+                -torch.tensor(weights) / temperature, dim=0
+            ).numpy()
         else:
-            # After warmup: use full strategy
-            if strategy == 'difficulty':
-                # Higher difficulty = higher weight
-                curriculum_weights = torch.softmax(
-                    torch.tensor(weights) / temperature, dim=0
-                ).numpy()
-            elif strategy == 'easy':
-                # Lower difficulty = higher weight
-                curriculum_weights = torch.softmax(
-                    -torch.tensor(weights) / temperature, dim=0
-                ).numpy()
-            else:
-                raise ValueError("Strategy must be 'difficulty' or 'easy'")
+            raise ValueError("Strategy must be 'difficulty' or 'easy'")
         
         # Scale weights to achieve target effective percentage
         if current_effective_percentage < 1.0:
@@ -486,10 +554,7 @@ class CurriculumLearning:
             n_active = int(n_samples * current_effective_percentage)
             
             # Get indices of samples to keep (highest weights for current strategy)
-            if strategy == 'difficulty' or (strategy == 'easy' and current_iteration < warmup_iterations):
-                active_indices = np.argpartition(curriculum_weights, -n_active)[-n_active:]
-            else:  # easy strategy after warmup
-                active_indices = np.argpartition(curriculum_weights, -n_active)[-n_active:]
+            active_indices = np.argpartition(curriculum_weights, -n_active)[-n_active:]
             
             # Set inactive samples to very low weight (but not zero to avoid sampling issues)
             scaled_weights = np.full_like(curriculum_weights, 1e-6)
